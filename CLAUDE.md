@@ -64,8 +64,15 @@ discipline of the prior `llm-cost-router` project.
   ```
 
 ## Current stage
-plan — architecture locked (STT/VAD/TTS/benchmark protocol/deploy target
-all resolved). Not yet scaffolded.
+scaffold — complete. Folder structure, dependencies, and config are in
+place with no business logic yet (VAD/STT/TTS/LLM modules are typed stubs
+that raise `NotImplementedError`). Verified for real, not just written:
+full dependency install succeeds (`pip install -r requirements.txt -r
+requirements-dev.txt`), 5/5 tests pass, and the real server boots via
+`uvicorn server:app` and serves both `/api/health` and `/` correctly. See
+DECISIONS.md for two real bugs caught and fixed during this stage (a
+route-shadowing ordering bug, and a missing-wheel dependency swap). Next:
+build stage.
 
 ## Open questions
 - STT choice: does `faster-whisper` actually deliver low-enough-latency

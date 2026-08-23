@@ -1,0 +1,40 @@
+# Runtime dependencies
+
+fastapi>=0.111
+uvicorn[standard]>=0.30
+
+# Config / env
+pydantic>=2.7
+pydantic-settings>=2.3
+python-dotenv>=1.0
+
+# LLM (streaming, matches the llm-cost-router project's $0-tier choice)
+groq>=0.9
+
+# STT: faster-whisper (CTranslate2-backed Whisper), runs on CPU. Only
+# invoked *after* a barge-in fires -- see voice_agent/stt.py -- not on the
+# hot interrupt-detection path.
+faster-whisper>=1.0
+
+# Barge-in trigger: Silero VAD (via torch.hub) is the primary choice --
+# confirmed working in the Vercel deploy spike, see DECISIONS.md. CPU-only
+# torch build, not the PyPI default, to avoid pulling the full NVIDIA CUDA
+# runtime on a Linux deploy (same reasoning as llm-cost-router).
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.13.0+cpu
+torchaudio
+# webrtcvad: lighter fallback VAD if Silero's CPU latency doesn't hold up
+# under real barge-in timing once benchmarked -- see CLAUDE.md "Open
+# questions". Using the `webrtcvad-wheels` fork, not the original
+# `webrtcvad` package: the original ships source-only (no prebuilt wheels
+# for ANY platform on PyPI, verified via the PyPI JSON API), so it needs a
+# C compiler wherever it's installed -- failed locally on this Windows dev
+# machine (no MSVC Build Tools) and would carry the same risk on Vercel's
+# Linux build. The fork is a maintained drop-in (`import webrtcvad` is
+# unchanged) that publishes real wheels for manylinux/Windows/macOS. See
+# DECISIONS.md.
+webrtcvad-wheels>=2.0.14
+
+# TTS: Piper -- local, streams in chunks. Pulls in onnxruntime.
+piper-tts>=1.2
+onnxruntime>=1.29

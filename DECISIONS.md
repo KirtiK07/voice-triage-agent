@@ -83,3 +83,37 @@ the maintenance surface (two deploy configs, two secret sets) for zero
 payoff, and Oracle still carries real capacity risk even if provisioned.
 Vercel remains the sole deploy target unless a real blocker surfaces once
 the actual app is built against it.
+
+## Scaffold stage: two real bugs caught before they shipped
+
+**Route-shadowing bug, caught by reasoning about Starlette's routing
+before it ever ran wrong.** The first draft of `server.py` registered
+`app.mount("/", StaticFiles(...))` *before* the `/api/health` and
+`/api/ws` route decorators. Starlette dispatches on the first path-prefix
+match in registration order, not by whether the matched route actually
+returns a non-404 — so a `"/"` mount registered first would have silently
+swallowed every request to `/api/*`, static files or not. Fixed by moving
+the mount to the end of the file, after the API routes, with a comment
+explaining why the order matters (so a future edit doesn't reintroduce
+it). A regression test (`test_static_index_served_and_api_routes_not_shadowed`)
+locks this in.
+
+**`webrtcvad` has no prebuilt wheels on PyPI for any platform — verified
+via the PyPI JSON API, not discovered by guessing.** Installing the
+original `requirements.txt` failed locally with `Microsoft Visual C++
+14.0 or greater is required` (no MSVC Build Tools on this Windows dev
+machine). Before just "fixing the local machine," checked whether this
+was a local-only problem or a real risk for the Vercel deploy too:
+queried `pypi.org/pypi/webrtcvad/json` directly and confirmed the latest
+release (2.0.10) ships **only an sdist** — meaning Vercel's Linux build
+would face the same C-compiler dependency, not just this laptop. Checked
+for a maintained alternative rather than vendoring a compiler toolchain:
+`webrtcvad-wheels` is a drop-in fork (same `import webrtcvad` API, same
+functionality) that publishes real prebuilt wheels for manylinux, macOS,
+and Windows across Python 3.6-3.13 — confirmed via the same JSON-API
+check before switching to it. Swapped in `requirements.txt` with a
+comment recording why, so a future contributor doesn't "helpfully"
+revert it to the more obviously-named original package. Full dependency
+install and the 5-test suite (including a real `uvicorn server:app` boot
+smoke test, not just the ASGI test client) verified clean after the
+swap.
