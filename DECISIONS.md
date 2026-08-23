@@ -117,3 +117,63 @@ revert it to the more obviously-named original package. Full dependency
 install and the 5-test suite (including a real `uvicorn server:app` boot
 smoke test, not just the ASGI test client) verified clean after the
 swap.
+
+## Build stage: TTS (Piper)
+
+Implemented against Piper's real API (`PiperVoice.load`, `.synthesize()`,
+`piper.download_voices.download_voice`) inspected directly in the venv
+rather than guessed from docs. `download_voice()` fetches from Hugging
+Face (`rhasspy/piper-voices`) into `models/piper/` (gitignored, downloaded
+at runtime like the classifier snapshot pattern in `llm-cost-router`).
+Piper's own `synthesize()` is a blocking, CPU-bound sync generator (one
+`AudioChunk` per sentence) -- run on a background thread, chunks handed
+to the async caller through a queue, so breaking out of iteration early
+(the barge-in case) doesn't block on further ONNX inference.
+
+**Real bug caught by a genuine network flake, then fixed and covered by
+a regression test:** the first version's background-thread helper had a
+bare `finally: chunk_queue.put(_SENTINEL)` with no exception handling.
+A transient network error downloading the voice's `.onnx.json` config
+(`urlopen error [WinError 10065] A socket operation was attempted to an
+unreachable host`) got silently swallowed -- the caller just saw an
+empty audio stream (0 chunks) instead of an error, failing
+`test_synthesize_stream_yields_real_audio` with no indication why. Fixed
+by putting exceptions on the queue too and re-raising them on the
+consumer side; `test_synthesize_stream_propagates_real_failures`
+(monkeypatches `_load_voice` to force a failure) locks this in so a
+future refactor can't silently reintroduce it. Re-ran after the fix with
+the model already cached: 4/4 passed in 5.67s (vs. 33+ minutes on the
+run that hit the network flake -- confirms it really was transient, not
+a code path that's slow every time).
+
+## Build stage: VAD (barge-in trigger)
+
+**Silero's exact frame-size constraint was verified by testing, not
+assumed from docs:** the JIT-scripted `silero_vad` model raises "Input
+audio chunk is too short" for anything other than exactly 512 samples
+(32ms) at 16kHz -- 256, 480, 1024, and 160 were all tried and all
+failed, confirming this is a hard requirement, not a flexible minimum.
+This matches Silero's own documented supported chunk sizes (512 @ 16kHz,
+256 @ 8kHz), now recorded here so `SileroDetector.frame_size_samples`
+isn't "mysteriously" hardcoded to a caller who hasn't read the spike
+notes.
+
+**Deliberately did not use Silero's own `VADIterator` streaming
+utility**, despite it existing for exactly this use case: inspecting its
+source showed it fires on the very first frame that crosses `threshold`,
+with no duration-accumulation knob -- too eager for this project's
+"sustained ~200-300ms" design (avoiding false triggers on breaths/
+coughs, per the user's locked decision). Implemented the
+consecutive-speech-frame accumulation directly against the model's raw
+per-frame probability instead, in `SileroDetector`/`WebRTCDetector`.
+
+**Testing strategy split deliberately in two:** a real negative control
+(50 consecutive real-inference calls on true silence, asserting none
+fire) proves the model and our threshold wiring aren't broken, without
+needing to craft synthetic "speech" audio that reliably scores as
+speech -- that's Silero's own concern, not something worth re-testing
+here. The accumulation *logic itself* (fires at exactly the Nth
+consecutive frame, not N-1 or N+1) is tested separately by monkeypatching
+only the per-frame probability call, isolating "does our counting logic
+work" from "does the model correctly classify this audio" -- two
+different things that a single audio-based test would conflate.
