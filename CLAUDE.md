@@ -64,22 +64,38 @@ discipline of the prior `llm-cost-router` project.
   ```
 
 ## Current stage
-build — in progress. Scaffold complete (see below). All four pipeline
-pieces implemented for real and tested: TTS (Piper, streaming),
-VAD (Silero/WebRTC, both real), STT (faster-whisper, real round-trip
-tested against real Piper output), LLM (Groq, same model as
-llm-cost-router). `pipeline.py`'s `CallSession` ties them together with
-the actual barge-in cancel/restart state machine and the three-timestamp
-benchmark instrumentation — the project's core hard problem, now working
-and tested (34/35 passing; 1 skipped pending a real `GROQ_API_KEY` in
-`.env`, deferred to document stage same as the prior project's rhythm).
-Several real bugs caught during this stage before they shipped — see
-DECISIONS.md for the full list (exception-swallowing in TTS, a
-timestamp-ownership design issue and an async/race bug in the pipeline,
-two test-design races). **Not yet done:** `server.py`'s `/api/ws` handler
-still only accepts+closes (scaffold stub) — needs real wiring to
-`CallSession` plus the browser client's real microphone capture/
-playback/barge-in UI (currently just a connectivity-check stub).
+build — functionally complete, verification gap remains. All pieces
+implemented for real: TTS (Piper, streaming), VAD (Silero/WebRTC),
+STT (faster-whisper), LLM (Groq), `pipeline.py`'s `CallSession`
+(barge-in cancel/restart state machine + three-timestamp benchmark
+instrumentation), `turn_taking.py` (end-of-utterance detection, reuses
+the same cached VAD instance as barge-in), and `server.py`'s `/api/ws`
+handler wiring all of it together with real microphone-audio framing.
+The browser client (`public/client.js`, `public/mic-worklet.js`) does
+real `getUserMedia` capture via a dedicated AudioWorklet (16kHz,
+separate audio thread for low-latency barge-in timing) and a
+gapless-but-instantly-interruptible playback scheduler.
+
+46/47 automated tests passing (1 skipped: real Groq call, pending a real
+`GROQ_API_KEY` in `.env`, deferred to document stage). Several real bugs
+caught and fixed before shipping — see DECISIONS.md for the full list
+(exception-swallowing in TTS, a timestamp-ownership design issue and an
+async/race bug in the pipeline, two test-design races, byte-length bugs
+in the WS handler's own tests).
+
+**Two real, stated gaps, not glossed over:**
+1. No automated coverage for the browser client (no JS test framework;
+   the behavior that matters — real mic capture, AudioWorklet timing,
+   playback scheduling — can't be meaningfully unit-tested anyway).
+   Smoke-tested via browser automation up to the point of it correctly
+   requesting microphone access; automation cannot grant a real OS mic
+   permission dialog, so the actual mic→WS→playback→barge-in loop has
+   **not** been exercised end-to-end yet. Needs a human with a real
+   microphone.
+2. `.env` for this project is still empty (`GROQ_API_KEY` unset) — the
+   one real Groq integration test skips, and the full loop can't run at
+   all without it. Both gaps close together: filling in `.env` and doing
+   the human mic-test is the next concrete step, likely at test stage.
 
 ## Open questions
 - STT choice: does `faster-whisper` actually deliver low-enough-latency

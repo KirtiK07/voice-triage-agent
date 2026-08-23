@@ -270,3 +270,44 @@ that the task was "still running" after yielding control once wasn't
 actually guaranteed. Fixed with a `slow_session` fixture (a deliberately
 slowed-down fake TTS stream) for any test that needs to interrupt a turn
 mid-flight, rather than relying on incidental timing.
+
+## Build stage: end-of-utterance detection (turn_taking.py) and the WS handler
+
+Barge-in detection (vad.py) answers "has the caller started talking";
+knowing when to stop listening and actually respond needs the opposite
+signal -- "has the caller finished talking" (sustained silence after
+speech). Rather than load a second VAD model for this, `UtteranceCapture`
+calls the same `get_detector()` factory vad.py already exposes -- since
+it caches by backend+threshold, this returns the identical instance
+`CallSession` uses for barge-in, with no extra memory/compute and no
+special plumbing to share it. Safe because the two uses are always
+sequential per call (listening for a new utterance vs. listening for a
+barge-in during playback), never concurrent.
+
+`/api/ws`'s state branching is deliberately simple: `session.is_speaking`
+itself *is* the mode flag (feed frames to the session for barge-in
+detection when true, to the utterance capture when false) -- no separate
+state variable to keep in sync, since `CallSession` already tracks this
+correctly (verified in test_pipeline.py).
+
+**Real testing gap, stated plainly:** the browser client (`client.js`,
+`mic-worklet.js`) has no automated test coverage -- there's no JS test
+framework in this project, and the actual behavior that matters
+(getUserMedia mic capture, AudioWorklet timing, gapless-but-interruptible
+playback scheduling) can't be meaningfully unit-tested without a real
+browser and a real microphone anyway. Syntax-checked with `node --check`
+(catches typos, not behavior) and smoke-tested via browser automation up
+to the point of the code correctly requesting microphone access -- the
+page loads, all static assets resolve at the paths the client actually
+references (`client.js`, `mic-worklet.js`), clicking "Start call"
+disables the button and correctly triggers the `getUserMedia` flow with
+the right status update, no console errors before that point. Automation
+could not go further: `getUserMedia` opens a real native OS/browser
+permission dialog that blocks the page's renderer (confirmed directly --
+`Page.captureScreenshot` timed out twice in a row right after the
+click), which is expected, correct behavior, not a bug, but means the
+actual mic-capture -> WebSocket -> playback -> barge-in loop has **not**
+been verified end-to-end yet. That needs a human, with a real
+microphone, clicking through it -- flagged here rather than glossed
+over. Also still blocked on a real `GROQ_API_KEY` (see the LLM section
+above) for the same full-loop test.

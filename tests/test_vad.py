@@ -38,6 +38,14 @@ class TestSileroDetector:
         results = [detector.process_frame(frame) for _ in range(50)]
         assert not any(results)
 
+    def test_classify_frame_real_silence_is_false(self):
+        """classify_frame is the raw per-frame signal `process_frame`
+        builds on -- used directly by the end-of-utterance capture logic
+        (see turn_taking.py), so it needs its own real-inference check,
+        not just coverage-by-association through process_frame."""
+        detector = SileroDetector(speech_threshold_ms=250)
+        assert detector.classify_frame(_silence_frame(512)) is False
+
     def test_accumulation_fires_after_threshold_and_resets_on_silence(self, monkeypatch):
         """Tests *our* duration-accumulation logic precisely by
         controlling the per-frame probability directly, rather than

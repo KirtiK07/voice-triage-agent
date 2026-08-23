@@ -76,6 +76,16 @@ def _synthesize_blocking(text: str, chunk_queue: "queue.Queue[bytes | BaseExcept
         chunk_queue.put(_SENTINEL)
 
 
+def output_sample_rate() -> int:
+    """Piper's native output sample rate for the configured voice (22050Hz
+    for en_US-lessac-medium, verified directly via `voice.config.sample_rate`
+    -- not hardcoded, so a future voice swap doesn't silently desync the
+    browser client's playback config from the real audio being sent).
+    Loads the voice if not already loaded (same cached singleton as
+    synthesis itself)."""
+    return _load_voice().config.sample_rate
+
+
 async def synthesize_stream(text: str) -> AsyncIterator[bytes]:
     """Yield 16-bit PCM audio chunks as they're synthesized. Breaking out
     of iteration early (e.g. on barge-in) stops consumption -- the

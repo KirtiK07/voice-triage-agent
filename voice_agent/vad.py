@@ -20,17 +20,30 @@ SAMPLE_RATE = 16000
 
 class BargeInDetector(Protocol):
     """Interface every VAD backend implements. `frame_size_samples`
-    documents the exact chunk size the backend's `process_frame` expects
-    -- backends have genuinely different native frame-size constraints
-    (see below), so callers must chunk incoming PCM accordingly rather
-    than assume one universal size."""
+    documents the exact chunk size the backend's methods expect --
+    backends have genuinely different native frame-size constraints (see
+    below), so callers must chunk incoming PCM accordingly rather than
+    assume one universal size."""
 
     frame_size_samples: int
 
-    def process_frame(self, audio_frame: bytes) -> bool:
+    def classify_frame(self, audio_frame: bytes) -> bool:
         """Feed one 16-bit PCM mono frame at 16kHz, exactly
-        `frame_size_samples` samples long. Returns True the moment
-        sustained speech (past the configured threshold) is detected."""
+        `frame_size_samples` samples long. Returns the raw per-frame
+        speech/silence classification, with no duration-accumulation --
+        used directly by callers that need a *symmetric* signal (e.g.
+        detecting the caller has gone silent again, not just that they
+        started talking). `process_frame` builds sustained-speech-start
+        detection on top of this; this method exists on the public
+        interface too since it's a genuinely different, useful signal on
+        its own."""
+        ...
+
+    def process_frame(self, audio_frame: bytes) -> bool:
+        """Feed one frame (same format as `classify_frame`). Returns
+        True the moment sustained speech (past the configured threshold)
+        is detected -- i.e. `classify_frame` returning True for enough
+        consecutive frames."""
         ...
 
     def reset(self) -> None:
@@ -65,7 +78,7 @@ class SileroDetector:
         self._frames_needed = max(1, round(speech_threshold_ms / frame_ms))
         self._consecutive_speech_frames = 0
 
-    def process_frame(self, audio_frame: bytes) -> bool:
+    def classify_frame(self, audio_frame: bytes) -> bool:
         if len(audio_frame) != self.frame_size_samples * 2:  # 16-bit = 2 bytes/sample
             raise ValueError(
                 f"SileroDetector requires exactly {self.frame_size_samples} samples "
@@ -76,8 +89,10 @@ class SileroDetector:
         pcm = np.frombuffer(audio_frame, dtype=np.int16).astype(np.float32) / 32768.0
         tensor = self._torch.from_numpy(pcm)
         speech_prob = self._model(tensor, SAMPLE_RATE).item()
+        return speech_prob >= self._prob_threshold
 
-        if speech_prob >= self._prob_threshold:
+    def process_frame(self, audio_frame: bytes) -> bool:
+        if self.classify_frame(audio_frame):
             self._consecutive_speech_frames += 1
         else:
             self._consecutive_speech_frames = 0
@@ -110,15 +125,16 @@ class WebRTCDetector:
         self._frames_needed = max(1, round(speech_threshold_ms / frame_ms))
         self._consecutive_speech_frames = 0
 
-    def process_frame(self, audio_frame: bytes) -> bool:
+    def classify_frame(self, audio_frame: bytes) -> bool:
         if len(audio_frame) != self.frame_size_samples * 2:
             raise ValueError(
                 f"WebRTCDetector requires exactly {self.frame_size_samples} samples "
                 f"({self.frame_size_samples * 2} bytes) per frame, got {len(audio_frame)} bytes"
             )
-        is_speech = self._vad.is_speech(audio_frame, SAMPLE_RATE)
+        return self._vad.is_speech(audio_frame, SAMPLE_RATE)
 
-        if is_speech:
+    def process_frame(self, audio_frame: bytes) -> bool:
+        if self.classify_frame(audio_frame):
             self._consecutive_speech_frames += 1
         else:
             self._consecutive_speech_frames = 0

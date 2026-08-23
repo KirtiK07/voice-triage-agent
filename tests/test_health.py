@@ -14,9 +14,11 @@ async def test_health_endpoint():
     assert body["vad_backend"] in ("silero", "webrtc")
 
 
-def test_ws_endpoint_accepts_and_closes():
-    """Scaffold-stage stub behavior only -- accepts then closes
-    immediately. Real barge-in orchestration is build-stage work."""
+def test_ws_endpoint_accepts_and_disconnects_cleanly():
+    """Basic connectivity smoke test -- the real handler's actual
+    protocol (ready message, audio framing, barge-in/transcript events)
+    is tested in test_server_ws.py; this just confirms connecting and
+    then disconnecting without sending anything doesn't raise or hang."""
     client = TestClient(app)
     with client.websocket_connect("/api/ws"):
         pass  # connection accepted without raising is the assertion
