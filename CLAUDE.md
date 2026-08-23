@@ -28,12 +28,24 @@ discipline of the prior `llm-cost-router` project.
   or a free tier of a hosted streaming TTS API, evaluated the same
   research-before-assuming way Redis/hosting options were evaluated on the
   prior project.
+- **Barge-in trigger:** VAD (Silero, WebRTC VAD as a lighter fallback) —
+  fast enough to be the interrupt signal itself; `faster-whisper` only
+  transcribes *after* a barge-in fires (the "what," not the "when," since
+  its partials are too slow at 1-2s context to be the trigger).
 - **Pipeline:** WebSocket-based streaming STT → LLM → streaming TTS, with
   barge-in handled by detecting new caller speech during agent playback and
   cancelling/restarting the in-flight response.
-- **Eval harness:** custom — benchmarks time-to-first-audio-byte and
-  interruption-recovery latency (the two metrics real voice AI teams care
-  about, per the plan), not just a "does it work" demo.
+- **Deploy target:** Vercel Hobby (free) — native WebSocket support
+  (public beta) over FastAPI/Python ASGI, verified end-to-end with a real
+  scratch deploy of the actual dependency chain (see "Open questions"
+  below for the full spike results). Needs `VERCEL_SUPPORT_LARGE_FUNCTIONS=1`
+  set on the real project (bundle exceeds the 500MB default with
+  torch+ctranslate2+onnxruntime). Client needs reconnect-with-backoff
+  logic for the 300s hard connection limit on Hobby.
+- **Eval harness:** custom — benchmarks cutoff latency (playback stopped −
+  VAD fired) and recovery latency (new response started − VAD fired),
+  reported separately since they have different failure modes
+  (buffering/cancellation vs. LLM+TTS pipeline speed).
 
 ## Workflow rules (inherited from parent workspace)
 - Work in stages: plan → scaffold → build → test → document → deploy.
@@ -52,7 +64,8 @@ discipline of the prior `llm-cost-router` project.
   ```
 
 ## Current stage
-plan
+plan — architecture locked (STT/VAD/TTS/benchmark protocol/deploy target
+all resolved). Not yet scaffolded.
 
 ## Open questions
 - STT choice: does `faster-whisper` actually deliver low-enough-latency
@@ -77,18 +90,43 @@ plan
   (which would break once it's untracked). See [[demo-media-local-only]]
   in Claude's memory — this is now a standing preference across projects,
   not a one-off for this repo.
-- Live host for the WebSocket backend: **still open.** Fly.io confirmed
-  dead (no free tier at all, credit card required, no free allowance) and
-  Railway confirmed insufficient (its "Free Plan" is only $1/month in
-  usage credits — not enough for an always-on server) as of 2026-08-23.
-  Oracle Cloud's "Always Free" tier is the strongest real candidate found
-  so far (genuinely free forever, 2 ARM OCPUs/12GB RAM or 2x tiny AMD
-  instances) but needs the user's own credit card for identity
-  verification and account setup (can't be done by Claude Code, same
-  OAuth-style constraint as the Streamlit Cloud signup on the prior
-  project) — and Oracle's free ARM capacity is known to be sometimes
-  unavailable by region. Render is a weak fallback at best: it already
-  OOM'd on this same class of ML workload (STT/TTS models) on the prior
-  project's 512MB free tier. Not yet decided between "user sets up Oracle
-  Cloud" / "keep researching other hosts" / "drop the live-host
-  requirement" — needs the user's input before scaffold begins.
+- Live host for the WebSocket backend: **resolved — Vercel Hobby
+  (free).** Fly.io confirmed dead (no free tier, credit card required) and
+  Railway confirmed insufficient ($1/month usage credit — not enough for
+  an always-on server) as of 2026-08-23. Oracle Cloud Always Free was the
+  leading fallback but needs the user's own account/card setup with no
+  guarantee of ARM capacity in-region.
+
+  Then re-evaluated: Vercel added native WebSocket support in public beta
+  (June 2026), works with FastAPI/Python over ASGI — this project's exact
+  stack — and the user is already logged into an existing Vercel account
+  (zero setup friction). **Verified with a real deploy, not just docs**
+  (scratch spike, since discarded): a FastAPI WebSocket function bundling
+  the actual planned dependency chain (`torch` CPU, `ctranslate2`,
+  `faster-whisper`, `onnxruntime`, `piper-tts`) built and ran cleanly on
+  Vercel Hobby. Real findings from that spike:
+  - Uncompressed bundle came to **1.16GB**, over the *default* 500MB
+    Python function limit — despite Vercel's own current docs describing
+    5GB as available "on Fluid Compute" without flagging it as opt-in.
+    Fixed with one project-level env var, `VERCEL_SUPPORT_LARGE_FUNCTIONS=1`
+    (confirmed in the build log: "exceeds the standard size limit;
+    enabling large functions (beta)") — a config change, not a code
+    change, so this still counts as deploying the real stack "as-is."
+  - All five heavy imports succeeded; a **real Silero VAD model was
+    loaded via `torch.hub` and ran a real inference** (`speech_prob`
+    correctly near-zero on a silence frame) — not just "imports work,"
+    actually functionally correct.
+  - **Peak memory: 315MB** — for comparison, Render's 512MB free tier
+    already OOM'd on a *lighter* workload in the prior project; this
+    leaves ~1.7GB of headroom on Vercel's 2GB Hobby limit.
+  - Clean WebSocket lifecycle: open → 7 messages streamed → clean close
+    (code 1000), no crashes, no timeouts (total runtime ~3.7s warm).
+  - One dependency gap caught and fixed: Silero VAD needs `torchaudio`,
+    not listed in the original plan — added to the real requirements.txt.
+
+  Real caveats carried into scaffold, not hidden: 300s hard connection
+  limit on Hobby (needs client reconnect logic — a documented Vercel
+  pattern, not a workaround); Hobby is personal/non-commercial use only
+  (fits this portfolio project); the beta status of native WebSocket
+  support means this should be re-verified once the real app is built,
+  not assumed permanent from one spike.
