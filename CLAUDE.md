@@ -64,15 +64,22 @@ discipline of the prior `llm-cost-router` project.
   ```
 
 ## Current stage
-scaffold — complete. Folder structure, dependencies, and config are in
-place with no business logic yet (VAD/STT/TTS/LLM modules are typed stubs
-that raise `NotImplementedError`). Verified for real, not just written:
-full dependency install succeeds (`pip install -r requirements.txt -r
-requirements-dev.txt`), 5/5 tests pass, and the real server boots via
-`uvicorn server:app` and serves both `/api/health` and `/` correctly. See
-DECISIONS.md for two real bugs caught and fixed during this stage (a
-route-shadowing ordering bug, and a missing-wheel dependency swap). Next:
-build stage.
+build — in progress. Scaffold complete (see below). All four pipeline
+pieces implemented for real and tested: TTS (Piper, streaming),
+VAD (Silero/WebRTC, both real), STT (faster-whisper, real round-trip
+tested against real Piper output), LLM (Groq, same model as
+llm-cost-router). `pipeline.py`'s `CallSession` ties them together with
+the actual barge-in cancel/restart state machine and the three-timestamp
+benchmark instrumentation — the project's core hard problem, now working
+and tested (34/35 passing; 1 skipped pending a real `GROQ_API_KEY` in
+`.env`, deferred to document stage same as the prior project's rhythm).
+Several real bugs caught during this stage before they shipped — see
+DECISIONS.md for the full list (exception-swallowing in TTS, a
+timestamp-ownership design issue and an async/race bug in the pipeline,
+two test-design races). **Not yet done:** `server.py`'s `/api/ws` handler
+still only accepts+closes (scaffold stub) — needs real wiring to
+`CallSession` plus the browser client's real microphone capture/
+playback/barge-in UI (currently just a connectivity-check stub).
 
 ## Open questions
 - STT choice: does `faster-whisper` actually deliver low-enough-latency

@@ -177,3 +177,96 @@ consecutive frame, not N-1 or N+1) is tested separately by monkeypatching
 only the per-frame probability call, isolating "does our counting logic
 work" from "does the model correctly classify this audio" -- two
 different things that a single audio-based test would conflate.
+
+## Build stage: STT (faster-whisper) and the sample-rate mismatch
+
+Piper's native output is **22050Hz**, but faster-whisper (and Silero VAD)
+require **16kHz** -- checked directly (`voice.config.sample_rate`), not
+assumed. This is a real pipeline-level concern, not just a test-fixture
+detail: the browser client's microphone capture needs to request 16kHz
+directly from `getUserMedia` so nothing server-side has to resample
+incoming caller audio on the hot path; Piper's *output* (for playback
+only, never fed back into VAD/STT) doesn't need resampling at all, since
+browser audio playback handles arbitrary sample rates natively. Recorded
+here so build-stage work on the browser client doesn't rediscover this
+by trial and error.
+
+Tested with a genuine round-trip, not canned audio: Piper synthesizes a
+real sentence, a test-only linear-interpolation resampler (not claimed
+production-quality, explicitly documented as such) converts it to
+16kHz, and faster-whisper transcribes it -- asserting the actual content
+words come back, not just "doesn't crash." This is the strongest
+available end-to-end check that TTS output is intelligible enough for
+the STT half of the round-trip to work, without needing a
+human-recorded audio fixture in the repo.
+
+## Build stage: LLM (Groq)
+
+Same provider and model as `llm-cost-router` (`openai/gpt-oss-20b`,
+Groq's free tier) -- deliberately not re-evaluating alternatives, since
+that model is already verified working in production on the sibling
+project; no reason to re-gamble on a different free-tier model's
+availability/quality for this one. Streaming via `stream=True`, same
+client-injection testing pattern as that project's `GroqProvider`
+(`client` param so tests can fake the SDK instead of requiring a real
+key).
+
+**One real gap, stated plainly rather than hidden:** the one genuine
+end-to-end integration test (`test_stream_response_real_groq_call`) is
+`skipif`'d on `GROQ_API_KEY` not being set -- this project's `.env`
+hasn't been filled in with real keys yet (that happens at document
+stage, same rhythm as `llm-cost-router`). The fake-client tests cover
+the actual logic this module owns (token ordering, empty-delta
+filtering, early-stop-on-cancel), but the real Groq wire format hasn't
+been exercised against *this* module yet, only inferred from the
+sibling project's working code. Needs a real key before test stage can
+call this fully verified.
+
+## Build stage: pipeline.py -- the barge-in cancel/restart state machine
+
+This is the project's actual hard problem, so it got the most design
+scrutiny of anything built so far. Two real correctness issues were
+caught and fixed before they became flaky-test or production bugs, not
+after:
+
+**Timestamp ownership spans the cancel/restart boundary.**
+`t_vad_fire`/`t_playback_stopped` belong to the turn that got
+interrupted; `t_new_audio_start` belongs to the turn that replaces it.
+Naively creating a fresh `TurnTimings` per `start_turn()` call would
+have made `recovery_latency_ms` uncomputable (the two halves would live
+on different objects). Fixed by having `feed_mic_frame` return the
+in-flight turn's `TurnTimings` object, and `start_turn`'s `continuing`
+parameter accept it back in for the replacement turn -- same mutable
+object, populated across the boundary. A known remaining gap: a rapid
+*second* barge-in before the replacement turn sends any audio overwrites
+`t_vad_fire`/`t_playback_stopped` with the second interruption's
+timestamps rather than preserving the first. Not fixed -- it requires
+two barge-ins faster than one LLM+TTS round-trip apart, judged rare
+enough not to block build stage on, but recorded here rather than
+silently left as a surprise.
+
+**`feed_mic_frame` had to become `async`, not stay sync, to avoid a real
+race.** `asyncio.Task.cancel()` only *schedules* cancellation --
+`_run_turn`'s `except CancelledError` block (which records
+`t_playback_stopped`) runs whenever the event loop next reaches that
+task, not synchronously at the call site. A sync `feed_mic_frame`
+returning a `TurnTimings` object right after calling `.cancel()` would
+have returned it with `t_playback_stopped` still `None`, correct only by
+incidental event-loop scheduling luck. Fixed by making the method
+`async` and `await`-ing the cancelled task before returning, which
+guarantees the timestamp is really set.
+
+**Testing approach:** VAD/LLM/TTS are all faked with controllable,
+deterministic timing (a `_FakeDetector` fired on demand, fake async
+generators with an optional artificial delay) -- their own correctness
+is covered separately in `test_vad.py`/`test_llm.py`/`test_tts.py`, so
+these tests exercise only the orchestration logic: does a barge-in
+actually cancel playback, do the three timestamps land in the right
+place, does `turn_history` stay clean. Two of the six tests originally
+failed for a genuine test-design reason, not a pipeline bug: the
+"instant" fake generators (no artificial delay) could race to full
+completion within a single `asyncio.sleep(0)`, so the test's assumption
+that the task was "still running" after yielding control once wasn't
+actually guaranteed. Fixed with a `slow_session` fixture (a deliberately
+slowed-down fake TTS stream) for any test that needs to interrupt a turn
+mid-flight, rather than relying on incidental timing.
