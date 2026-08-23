@@ -41,3 +41,10 @@ recordings/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Demo recordings — kept locally for the user's own reference only, never
+# committed/deployed (barge-in especially needs to be *seen* to be
+# believed, but the recording itself stays private, not part of the repo).
+docs/demo.gif
+docs/demo.mp4
+*.demo.mp4

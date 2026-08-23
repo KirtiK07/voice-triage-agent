@@ -68,8 +68,27 @@ plan
   even look like — needs a small hand-designed test protocol (e.g.
   simulated audio inputs with scripted interruption points at fixed
   offsets), to be resolved at plan stage before scaffold begins.
-- Demo format: a live hosted demo for a voice pipeline is a much bigger
-  lift than the router project's Streamlit UI (WebSocket audio streaming
-  needs a real backend host, not a $0 static/serverless option) — likely
-  means a local-only demo + recorded GIF/video for the README, not a
-  public live URL. Confirm this tradeoff explicitly before document stage.
+- Demo format: **partly resolved.** Live host + a recorded video, not
+  recording alone — barge-in specifically needs to be *seen* live to be
+  believed. Live-host choice still open (see below). The recording
+  itself, however, is settled: stays **local-only**, saved into the
+  project folder for the user's own reference, gitignored, never
+  committed or deployed, and never referenced by a path in the README
+  (which would break once it's untracked). See [[demo-media-local-only]]
+  in Claude's memory — this is now a standing preference across projects,
+  not a one-off for this repo.
+- Live host for the WebSocket backend: **still open.** Fly.io confirmed
+  dead (no free tier at all, credit card required, no free allowance) and
+  Railway confirmed insufficient (its "Free Plan" is only $1/month in
+  usage credits — not enough for an always-on server) as of 2026-08-23.
+  Oracle Cloud's "Always Free" tier is the strongest real candidate found
+  so far (genuinely free forever, 2 ARM OCPUs/12GB RAM or 2x tiny AMD
+  instances) but needs the user's own credit card for identity
+  verification and account setup (can't be done by Claude Code, same
+  OAuth-style constraint as the Streamlit Cloud signup on the prior
+  project) — and Oracle's free ARM capacity is known to be sometimes
+  unavailable by region. Render is a weak fallback at best: it already
+  OOM'd on this same class of ML workload (STT/TTS models) on the prior
+  project's 512MB free tier. Not yet decided between "user sets up Oracle
+  Cloud" / "keep researching other hosts" / "drop the live-host
+  requirement" — needs the user's input before scaffold begins.
