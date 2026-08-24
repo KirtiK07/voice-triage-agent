@@ -405,3 +405,27 @@ simulated utterance sent mid-playback correctly triggered a real
 ~530-600KB a completed response normally runs), and started a new
 response in ~2s. This is the project's actual core feature, verified
 working for real, not assumed from unit tests alone.
+
+## Deploy: pyproject.toml broke the real Vercel build
+
+The first real production deploy (after the throwaway scratch spike
+already validated the dependency chain) failed at the build step with
+`uv lock ... error: No 'project' table found in: pyproject.toml`.
+Root cause: this repo's `pyproject.toml` only ever held tool config
+(`[tool.pytest.ini_options]`, `[tool.ruff]`) -- it was never meant to
+declare project metadata or dependencies, since those live in
+`requirements.txt`. Vercel's Python build detects `pyproject.toml` as a
+possible dependency manifest and runs `uv lock` against it; without a
+valid `[project]` table (PEP 621), that fails outright rather than
+falling back to `requirements.txt`. The scratch spike from plan stage
+never hit this because it never had a `pyproject.toml` at all.
+
+**Fix:** moved the two tool configs to their own native files
+(`pytest.ini`, `ruff.toml`) and deleted `pyproject.toml` entirely, rather
+than adding a minimal-but-unused `[project]` table -- that would create
+a second, easy-to-drift source of truth for dependencies alongside
+`requirements.txt` for no real benefit. Verified locally before
+redeploying: full test suite still finds `pytest.ini`'s config
+(56/56 passing) -- `ruff.toml`'s syntax wasn't independently verified
+(ruff isn't a project dependency), but it's Ruff's standard documented
+format, not something worth installing a tool just to check two lines.
