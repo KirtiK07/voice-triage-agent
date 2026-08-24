@@ -429,3 +429,22 @@ redeploying: full test suite still finds `pytest.ini`'s config
 (56/56 passing) -- `ruff.toml`'s syntax wasn't independently verified
 (ruff isn't a project dependency), but it's Ruff's standard documented
 format, not something worth installing a tool just to check two lines.
+
+## Deploy: public/ was never actually in the deployed bundle
+
+Second real deploy failure, after the pyproject.toml fix: the deployed
+function crashed on import with `RuntimeError: Directory 'public' does
+not exist`, at `server.py`'s `app.mount("/", StaticFiles(directory=
+"public", ...))` line. Root cause: Vercel's Python bundler includes
+files it can determine are "reachable" via static analysis of actual
+Python imports -- `public/` is never imported by any Python code, it's
+only referenced by a runtime string literal (`"public"`) passed to
+`StaticFiles`, which the bundler has no way to trace. The scratch spike
+never hit this because it had no static files at all.
+
+**Fix:** added `includeFiles: "public/**"` to `vercel.json`'s function
+config -- the explicit override Vercel's own docs describe for exactly
+this situation (files a function needs that static analysis can't
+discover on its own). Also updated `excludeFiles` to reference the real
+current dev-only files (`pytest.ini`, `ruff.toml`) instead of the
+now-deleted `pyproject.toml`.
