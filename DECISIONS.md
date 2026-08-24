@@ -448,3 +448,37 @@ this situation (files a function needs that static analysis can't
 discover on its own). Also updated `excludeFiles` to reference the real
 current dev-only files (`pytest.ini`, `ruff.toml`) instead of the
 now-deleted `pyproject.toml`.
+
+## Deploy: public/ is a reserved static-assets name on Vercel, renamed to webapp/
+
+The `includeFiles: "public/**"` fix didn't actually take effect on a
+redeploy (confirmed with a forced, non-cached deploy -- same crash,
+`RuntimeError: Directory 'public' does not exist`). Diagnosed further
+with a local `vercel build`, which surfaced the real problem directly:
+`The pattern "server.py" defined in \`functions\` doesn't match any
+Serverless Functions inside the \`api\` directory` -- Vercel's function
+config pattern-matching only looks inside an `api/` directory by
+default, so the entire `functions.server.py` block in `vercel.json`
+(both `includeFiles` and `excludeFiles`) was silently inert the whole
+time, matching nothing. Separately, `public` is a documented reserved
+convention on Vercel (confirmed for Next.js; the platform's static
+handling treats it specially platform-wide) -- likely stripped from the
+function bundle and routed through Vercel's own static layer instead,
+regardless of function config.
+
+**Fix:** renamed the directory `public/` -> `webapp/` (avoiding the
+reserved name entirely, `git mv` to preserve history) and simplified
+`vercel.json` back to just the schema reference -- the non-functional
+`functions.server.py` block was providing no real value once its
+pattern was confirmed to never match anything anyway. `server.py`'s
+`StaticFiles(directory="webapp", ...)` mount and its docstring updated
+to match. Verified locally first: full suite still 56/56 passing after
+the rename (the static-mount route-shadowing regression test in
+particular re-confirms the mount still works correctly under the new
+name).
+
+Local `vercel build` couldn't be used to fully verify the fix before
+redeploying -- it needs `uv` installed locally, which this dev machine
+doesn't have (Vercel's remote build servers have it; that's a
+build-environment difference, not a bug). Verification happened against
+the real remote deploy instead.

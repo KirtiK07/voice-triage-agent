@@ -2,7 +2,7 @@
 wsgi.py/asgi.py at the project root, defining a top-level `app` -- see
 DECISIONS.md "Deploy target"). Local dev: `uvicorn server:app --reload`.
 
-WebSocket protocol (see public/client.js for the browser side):
+WebSocket protocol (see webapp/client.js for the browser side):
   Client -> server:
     binary frames: raw 16-bit PCM mono audio at 16kHz, any chunk size
       (server-side buffers into whatever frame size the active VAD
@@ -196,4 +196,4 @@ async def ws_endpoint(websocket: WebSocket):
 # registered *before* the /api/* routes above would shadow them
 # entirely (matches every path, whether or not the file exists) --
 # caught in scaffold review, not left as a live bug.
-app.mount("/", StaticFiles(directory="public", html=True), name="public")
+app.mount("/", StaticFiles(directory="webapp", html=True), name="webapp")
