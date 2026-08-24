@@ -64,8 +64,24 @@ discipline of the prior `llm-cost-router` project.
   ```
 
 ## Current stage
-build — complete and verified end-to-end for real, with a real
-`GROQ_API_KEY`. All pieces implemented and confirmed working together:
+Done. All six stages complete: plan → scaffold → build → test → document
+→ deploy. Live at https://voice-triage-agent.vercel.app/ (public GitHub
+repo: `KirtiK07/voice-triage-agent`), verified end-to-end against the
+real production deployment, not just locally.
+
+Deploy stage hit three real, separate bugs — see DECISIONS.md for the
+full diagnosis of each: (1) `pyproject.toml` had no `[project]` table,
+so Vercel's `uv lock` failed outright on it — replaced with native
+`pytest.ini`/`ruff.toml`; (2) the `webapp/` directory (originally named
+`public/`) was silently missing from the deployed bundle entirely —
+`vercel.json`'s `functions.server.py` pattern never actually matched
+anything (Vercel's function-config patterns only match inside an `api/`
+directory by default), and separately `public` turned out to be a
+reserved static-assets name on Vercel — fixed by renaming the directory
+and dropping the non-functional `functions` config block. Each fix was
+verified against a real redeploy before moving on, not assumed.
+
+All pieces implemented and confirmed working together:
 TTS (Piper, streaming), VAD (Silero/WebRTC), STT (faster-whisper), LLM
 (Groq), `pipeline.py`'s `CallSession` (barge-in cancel/restart state
 machine + three-timestamp benchmark instrumentation), `turn_taking.py`
@@ -103,15 +119,16 @@ pytest) — plus a real, general robustness gap it exposed: exceptions in
 lost, now caught, logged, and optionally surfaced to the client via a
 new `on_error` callback.
 
-**Remaining, real, stated gap:** the browser client (`public/client.js`,
-`public/mic-worklet.js`) still has no automated coverage and hasn't been
+**Remaining, real, stated gap:** the browser client (`webapp/client.js`,
+`webapp/mic-worklet.js`) still has no automated coverage and hasn't been
 exercised via a real human microphone — `simulate_speech` verifies the
-entire server-side pipeline for real, but the actual `getUserMedia`
-capture path is smoke-tested only (page loads, requests mic access
-correctly) pending a human clicking through it. Not blocking — the demo
-video and interview use will lean on `simulate_speech`'s no-mic path
-either way (see README/DECISIONS.md), with a real-mic test as a
-nice-to-have follow-up, not a blocker to calling this project done.
+entire server-side pipeline for real, including against the live
+production deployment, but the actual `getUserMedia` capture path is
+smoke-tested only (page loads, requests mic access correctly) pending a
+human clicking through it. Not blocking — the demo video, live demo, and
+interview use all lean on `simulate_speech`'s no-mic path either way
+(see README/DECISIONS.md), with a real-mic test as a nice-to-have
+follow-up, not a blocker to calling this project done.
 
 ## Open questions
 - STT choice: does `faster-whisper` actually deliver low-enough-latency

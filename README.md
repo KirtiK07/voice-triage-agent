@@ -1,7 +1,7 @@
 # Low-Latency Interruptible Voice Agent for Support Ticket Triage
 A voice interface for triaging support tickets that can be genuinely interrupted mid-response — not just talked over — for teams whose voice-agent demos break down the moment a real caller tries to interrupt them.
 
-**Live demo:** _[filled in at deploy stage — see DECISIONS.md "Deploy target"]_
+**Live demo:** https://voice-triage-agent.vercel.app/ — click **Demo mode (no microphone)** and type what the caller says (this is the same `simulate_speech` path the eval harness and demo video use — no mic needed to try the real pipeline, including barge-in: submit a second line while the agent is still replying). **Start call** does real microphone capture if you'd rather speak.
 
 ## Problem
 Most voice-agent demos can't handle a caller interrupting mid-response: the agent either keeps talking over them or the whole turn-taking logic breaks. That's a known, current hard problem in voice AI — real conversation is full of interruptions ("wait, actually...", "no hold on...", correcting yourself mid-sentence) and an agent that can't handle that isn't usable for a real phone call. This project builds one specific, narrow slice of that: a support-ticket-triage agent (caller describes an issue by voice, the agent classifies urgency/category and responds) where the caller can interrupt the agent's response at any point, and the agent actually stops and responds to the interruption instead of ignoring it or finishing its sentence first.
@@ -43,7 +43,7 @@ Raw numbers: [`eval/results/latest.json`](./eval/results/latest.json).
 - **Groq (`openai/gpt-oss-20b`)** — same model as the sibling `llm-cost-router` project, already verified working there; no reason to re-gamble on a different free-tier model.
 - **Piper** (local, ONNX-backed) — streaming TTS, chosen over a hosted API specifically so a live interrupt-heavy demo doesn't depend on someone else's rate limits.
 - A real background-thread + queue design in `voice_agent/tts.py` makes an in-flight Piper synthesis actually cancellable mid-stream, not just conceptually cancellable — that cancellation point is what cutoff latency measures.
-- **AudioWorklet**, not the deprecated `ScriptProcessorNode`, for microphone capture (`public/mic-worklet.js`) — runs on a dedicated audio thread, which matters here specifically since barge-in timing accuracy is the thing being benchmarked.
+- **AudioWorklet**, not the deprecated `ScriptProcessorNode`, for microphone capture (`webapp/mic-worklet.js`) — runs on a dedicated audio thread, which matters here specifically since barge-in timing accuracy is the thing being benchmarked.
 
 ## Run it
 ```bash
