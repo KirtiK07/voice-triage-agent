@@ -10,6 +10,10 @@
 const statusEl = document.getElementById("status");
 const transcriptEl = document.getElementById("transcript");
 const startButton = document.getElementById("start-button");
+const demoButton = document.getElementById("demo-button");
+const simulateContainer = document.getElementById("simulate-container");
+const simulateForm = document.getElementById("simulate-form");
+const simulateInput = document.getElementById("simulate-input");
 
 let ws = null;
 let micContext = null; // AudioContext @ 16kHz, for capture only
@@ -128,6 +132,33 @@ function handleEvent(msg) {
   }
 }
 
+// --- Demo mode: no microphone required. Connects the WebSocket only
+// (no getUserMedia call at all) and drives the same real server-side
+// pipeline via simulate_speech control messages -- see server.py's
+// docstring for why this exists and why it's the exact same code path
+// as genuine mic audio, not a mocked stand-in.
+function sendSimulatedSpeech(text) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  logTranscript(`(simulated) You: ${text}`);
+  ws.send(JSON.stringify({ event: "simulate_speech", text }));
+}
+
+demoButton.addEventListener("click", () => {
+  demoButton.disabled = true;
+  startButton.disabled = true;
+  setStatus("connecting…");
+  connect();
+  simulateContainer.hidden = false;
+});
+
+simulateForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const text = simulateInput.value.trim();
+  if (!text) return;
+  sendSimulatedSpeech(text);
+  simulateInput.value = "";
+});
+
 function setupPlaybackContext() {
   if (playbackContext) return;
   playbackContext = new AudioContext({ sampleRate: sampleRateOut });
@@ -163,12 +194,15 @@ async function startMic() {
 
 startButton.addEventListener("click", async () => {
   startButton.disabled = true;
+  demoButton.disabled = true;
   setStatus("requesting microphone…");
   try {
     await startMic();
     connect();
+    simulateContainer.hidden = false; // still available with a real mic -- e.g. to type a barge-in
   } catch (err) {
     setStatus(`microphone error: ${err.message}`);
     startButton.disabled = false;
+    demoButton.disabled = false;
   }
 });

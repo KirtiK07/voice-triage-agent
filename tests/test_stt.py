@@ -5,30 +5,14 @@ available check that the STT module works end-to-end, not just that it
 doesn't crash on silence.
 """
 
-import numpy as np
 import pytest
 
+from voice_agent.audio_utils import resample_int16
 from voice_agent.stt import transcribe
 from voice_agent.tts import synthesize_stream
 
 PIPER_SAMPLE_RATE = 22050
 WHISPER_SAMPLE_RATE = 16000
-
-
-def _resample_int16(pcm_bytes: bytes, from_rate: int, to_rate: int) -> bytes:
-    """Simple linear-interpolation resample -- adequate for a test
-    fixture, not claimed as production-quality resampling. The real
-    pipeline avoids needing this at all by having the browser client
-    capture microphone input at 16kHz directly (see CLAUDE.md); this
-    helper only exists to turn Piper's 22050Hz *output* into something
-    faster-whisper can transcribe for this round-trip test."""
-    samples = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32)
-    duration = len(samples) / from_rate
-    n_out = int(duration * to_rate)
-    x_old = np.linspace(0, duration, num=len(samples), endpoint=False)
-    x_new = np.linspace(0, duration, num=n_out, endpoint=False)
-    resampled = np.interp(x_new, x_old, samples)
-    return resampled.astype(np.int16).tobytes()
 
 
 @pytest.mark.asyncio
@@ -37,7 +21,7 @@ async def test_transcribe_recovers_real_synthesized_speech():
     chunks = [c async for c in synthesize_stream(text)]
     piper_audio = b"".join(chunks)
 
-    whisper_audio = _resample_int16(piper_audio, PIPER_SAMPLE_RATE, WHISPER_SAMPLE_RATE)
+    whisper_audio = resample_int16(piper_audio, PIPER_SAMPLE_RATE, WHISPER_SAMPLE_RATE)
     result = transcribe(whisper_audio)
 
     # Not an exact-match assertion -- Whisper's punctuation/casing can

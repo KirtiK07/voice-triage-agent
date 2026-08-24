@@ -31,6 +31,16 @@ def _load_model():
         return _model
 
 
+def warm() -> None:
+    """Forces the model to load now, synchronously, on the calling
+    thread -- see server.py's startup hook and DECISIONS.md "Model
+    warm-up and the torch/onnxruntime deadlock" for why this matters:
+    loading faster-whisper (which also touches ctranslate2) for the
+    first time needs to happen deliberately at startup, not implicitly
+    on a background thread during the first real request."""
+    _load_model()
+
+
 def transcribe(audio_bytes: bytes) -> str:
     """Transcribe a completed utterance. `audio_bytes` is 16-bit PCM
     mono at 16kHz (matching vad.py's SAMPLE_RATE -- the same audio

@@ -29,8 +29,9 @@ class _FakeCallSession:
     #: arm/inspect behavior without needing to intercept construction.
     instances: list = []
 
-    def __init__(self, send_audio, vad_backend=None):
+    def __init__(self, send_audio, vad_backend=None, on_error=None):
         self.send_audio = send_audio
+        self.on_error = on_error
         self.is_speaking = False
         self.armed_barge_in = False
         self.start_turn_calls = []
@@ -89,13 +90,19 @@ class _FakeUtteranceCapture:
         self._audio = b""
 
 
+async def _fake_synthesize_stream(_text):
+    # 8 bytes = one 4-sample frame, matches _FakeUtteranceCapture.frame_size_samples.
+    yield b"\x01\x02\x03\x04\x05\x06\x07\x08"
+
+
 def _install_fakes(monkeypatch):
     _FakeCallSession.instances = []
     _FakeUtteranceCapture.instances = []
     _FakeUtteranceCapture.next_feed_completes = False
     monkeypatch.setattr(server, "CallSession", _FakeCallSession)
     monkeypatch.setattr(server, "UtteranceCapture", _FakeUtteranceCapture)
-    monkeypatch.setattr(server.tts, "output_sample_rate", lambda: 22050)
+    monkeypatch.setattr(server.tts, "output_sample_rate", lambda: 16000)  # avoid resampling in these tests
+    monkeypatch.setattr(server.tts, "synthesize_stream", _fake_synthesize_stream)
 
 
 def test_ready_message_has_expected_fields(monkeypatch):
@@ -104,7 +111,7 @@ def test_ready_message_has_expected_fields(monkeypatch):
         ready = json.loads(ws.receive_text())
         assert ready["event"] == "ready"
         assert ready["sample_rate_in"] == 16000
-        assert ready["sample_rate_out"] == 22050
+        assert ready["sample_rate_out"] == 16000
         assert ready["frame_size_samples"] == 4
 
 
@@ -192,3 +199,58 @@ def test_multiple_small_binary_messages_are_reassembled_into_frames(monkeypatch)
 
         transcript_msg = json.loads(ws.receive_text())
         assert transcript_msg["event"] == "transcript"
+
+
+def test_simulate_speech_feeds_synthesized_audio_through_the_real_path(monkeypatch):
+    """simulate_speech must go through process_pcm exactly like real mic
+    audio, not a separate mocked path -- verified here by confirming a
+    JSON simulate_speech control message actually reaches the capture
+    and produces a real transcript event, using the same
+    _FakeUtteranceCapture the binary-frame tests use."""
+    _install_fakes(monkeypatch)
+    monkeypatch.setattr(server.stt, "transcribe", lambda audio: "simulated caller speech")
+
+    with TestClient(server.app).websocket_connect("/api/ws") as ws:
+        ws.receive_text()  # ready
+
+        _FakeUtteranceCapture.next_feed_completes = True
+        ws.send_text(json.dumps({"event": "simulate_speech", "text": "hello there"}))
+
+        transcript_msg = json.loads(ws.receive_text())
+        assert transcript_msg == {"event": "transcript", "text": "simulated caller speech"}
+
+        capture = _FakeUtteranceCapture.instances[-1]
+        # _fake_synthesize_stream yields one 8-byte (4-sample) chunk --
+        # confirms the synthesized audio actually reached the capture
+        # first, not just that *some* transcript event fired. Frames
+        # after it are simulate_speech's real trailing-silence padding
+        # (800ms, appended so UtteranceCapture's end-of-speech detection
+        # can fire on synthesized audio, which has no natural trailing
+        # silence -- see server.py's simulate_speech docstring) still
+        # being fed to the (already-completed-and-reset) fake capture as
+        # the start of a new in-progress utterance; not asserted on in
+        # detail here since that's process_pcm's normal continue-the-loop
+        # behavior, not something specific to simulate_speech.
+        assert capture.fed_frames[0] == b"\x01\x02\x03\x04\x05\x06\x07\x08"
+        assert all(f == b"\x00\x00\x00\x00\x00\x00\x00\x00" for f in capture.fed_frames[1:])
+
+
+def test_unknown_control_event_is_ignored_not_fatal(monkeypatch):
+    """A text message that isn't simulate_speech (e.g. a future/unknown
+    event, or a stray message) must not crash the connection."""
+    _install_fakes(monkeypatch)
+    monkeypatch.setattr(server.stt, "transcribe", lambda audio: "still works")
+
+    with TestClient(server.app).websocket_connect("/api/ws") as ws:
+        ws.receive_text()  # ready
+        ws.send_text(json.dumps({"event": "something_else"}))
+        # Connection should still be alive -- prove it by completing a
+        # real utterance afterwards and getting a normal transcript
+        # event back (receive_text() here is also the synchronization
+        # point: without it, checking server-side state right after
+        # send_bytes() would race the background thread that actually
+        # processes it).
+        _FakeUtteranceCapture.next_feed_completes = True
+        ws.send_bytes(b"\x00\x00" * 4)
+        transcript_msg = json.loads(ws.receive_text())
+        assert transcript_msg == {"event": "transcript", "text": "still works"}

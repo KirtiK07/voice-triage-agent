@@ -14,6 +14,8 @@ from typing import AsyncIterator
 
 from groq import AsyncGroq
 
+from voice_agent.config import settings
+
 SYSTEM_PROMPT = (
     "You are a support ticket triage agent on a phone call. The caller has "
     "just described an issue by voice (transcribed below, may contain minor "
@@ -29,9 +31,21 @@ _client: AsyncGroq | None = None
 
 
 def _get_client() -> AsyncGroq:
+    """Explicitly passes `settings.groq_api_key` rather than letting
+    AsyncGroq() fall back to its own bare `os.environ["GROQ_API_KEY"]`
+    lookup. That fallback is a real trap: `voice_agent.config.settings`
+    (pydantic-settings) parses `.env` into its own `Settings` instance,
+    but nothing else ever loads `.env` into the actual process
+    environment when running the real server -- only `tests/conftest.py`
+    does that, and only for pytest. Found the hard way: a background
+    `asyncio.create_task()` (see pipeline.py's CallSession) that hit
+    AsyncGroq()'s "api_key must be set" error died silently with zero
+    visible symptom (task exception never retrieved, task never awaited
+    or garbage-collected during the test) -- looked exactly like a hang
+    from the outside. See DECISIONS.md."""
     global _client
     if _client is None:
-        _client = AsyncGroq()
+        _client = AsyncGroq(api_key=settings.groq_api_key or None)
     return _client
 
 

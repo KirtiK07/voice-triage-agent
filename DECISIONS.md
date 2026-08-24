@@ -311,3 +311,97 @@ been verified end-to-end yet. That needs a human, with a real
 microphone, clicking through it -- flagged here rather than glossed
 over. Also still blocked on a real `GROQ_API_KEY` (see the LLM section
 above) for the same full-loop test.
+
+## The end-to-end verification saga: three real bugs that all looked like "hangs"
+
+Closing the "not yet verified end-to-end" gap (see the build-stage entries
+above) required actually running the full VAD -> STT -> LLM -> TTS ->
+barge-in loop for real, with a real `GROQ_API_KEY`. Since browser
+automation can't grant a real microphone permission (confirmed directly
+earlier), this needed a way to exercise the real pipeline without a mic
+-- which is what `simulate_speech` (see `server.py`'s docstring) was
+built for. Getting simulate_speech to actually work end-to-end surfaced
+three real, unrelated bugs, each of which looked identical from the
+outside (client waits forever, nothing happens) but had completely
+different causes. Recorded here in the order found, since the diagnosis
+process itself is worth keeping -- each false lead was ruled out with
+evidence, not assumption, before moving to the next hypothesis.
+
+**Bug 1 (real, fixed): first-load deadlock between torch and onnxruntime.**
+The very first real WebSocket test hung with flat 0% CPU and no pending
+network I/O (checked directly via `Get-Process` CPU deltas and `netstat`
+-- ruled out "slow but working" before calling it a hang). `CallSession`'s
+constructor loads Silero (torch) synchronously on the main thread at
+connection time; `tts.synthesize_stream()`'s first call loads Piper
+(onnxruntime) on a separate background thread shortly after. The two
+libraries' first-time thread-pool initialization racing on a fresh
+process is a known class of problem. **Fix:** added a FastAPI `lifespan`
+startup hook that warms all three models (VAD, STT, TTS) synchronously
+on the main thread, before any request is served -- removes *all*
+background-thread involvement from first-time model loading, which is a
+strictly safer fix than trying to pin down the exact race, and has the
+side benefit of removing cold-start latency from the first real user
+turn.
+
+**Bug 2 (real, fixed): Piper's synthesized audio has no trailing silence,
+so end-of-utterance never fires.** After Bug 1's fix, a fully-instrumented
+trace (temporary debug prints through every step -- kept deliberately
+crude and removed after, not left in production code) showed
+`simulate_speech` completing entirely successfully: TTS synthesized real
+audio, resampling worked, `process_pcm` fed every frame through the real
+VAD/capture logic -- but no transcript event was ever sent. Piper ends
+its output right after the last phoneme, with no natural trailing
+silence, so `UtteranceCapture`'s end-of-speech detector (sustained
+silence *after* speech, 600ms default -- see `turn_taking.py`) never
+saw enough silence to fire. The pipeline wasn't stuck; it was correctly,
+silently, waiting for a silence that would never come. **Fix:**
+`simulate_speech` appends 800ms of real trailing silence to the
+synthesized "caller" audio before feeding it in -- comfortably above the
+threshold, and using the exact same code path a real caller's natural
+pause would exercise, not a special case.
+
+**Bug 3 (real, fixed, the actual root cause behind the scariest-looking
+symptom): `GROQ_API_KEY` was never in the real process environment.**
+With Bugs 1 and 2 fixed, transcription started working (real STT results
+arrived correctly) but the agent's response never came -- flat CPU
+again, plus an established HTTPS connection sitting idle (checked via
+`netstat`, which turned out to be a red herring, not evidence of an
+in-flight request). Isolated by adding a plain HTTP debug endpoint that
+called `llm.stream_response()` directly, *outside* the
+`asyncio.create_task()` context `CallSession` normally uses -- this
+failed **instantly** with `groq.GroqError: The api_key client option
+must be set`, not a hang at all. Root cause: `voice_agent.config.settings`
+(pydantic-settings) parses `.env` into its own `Settings` instance, but
+nothing ever loads `.env` into the real OS process environment when
+running the actual server -- only `tests/conftest.py`'s `load_dotenv()`
+call does that, and only for pytest. `llm.py`'s `_get_client()` called
+bare `AsyncGroq()`, which falls back to reading `os.environ` directly --
+so it silently had no key, every time, outside of tests. **Fix:**
+`_get_client()` now explicitly passes `api_key=settings.groq_api_key`.
+
+**Why bug 3 looked like a hang and not an error, which is arguably the
+more important fix:** the failing call happened inside
+`CallSession._run_turn`, which runs as a fire-and-forget
+`asyncio.create_task()` that `start_turn()` deliberately never awaits
+(so barge-in can cancel it later). Nothing was watching that task for
+exceptions -- Python only surfaces an unretrieved task exception when the
+task is garbage-collected, which during a live session holding a
+reference to `self._playback_task` might be never. **Fix, independent of
+the specific API-key bug:** `_run_turn` now has a real `except Exception`
+clause (previously only `except asyncio.CancelledError` existed) that
+always logs the error and optionally calls an `on_error` callback;
+`server.py` wires this to send a `{"event": "error", ...}` message to
+the client. This is a general robustness fix, not specific to Groq --
+any future error in the LLM/TTS chain will now be visible instead of
+silently vanishing. Two regression tests
+(`test_run_turn_error_is_reported_via_on_error_not_swallowed`,
+`test_run_turn_error_is_logged_even_without_on_error`) lock this in.
+
+**Final verification, once all three were fixed:** a real end-to-end run
+with the real Groq key -- simulated caller speech transcribed correctly,
+agent response streamed back as real audio, and, critically, a second
+simulated utterance sent mid-playback correctly triggered a real
+`barge_in` event, cut the first response short (282KB delivered vs. the
+~530-600KB a completed response normally runs), and started a new
+response in ~2s. This is the project's actual core feature, verified
+working for real, not assumed from unit tests alone.

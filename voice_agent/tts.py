@@ -76,6 +76,20 @@ def _synthesize_blocking(text: str, chunk_queue: "queue.Queue[bytes | BaseExcept
         chunk_queue.put(_SENTINEL)
 
 
+def warm() -> None:
+    """Forces the voice to load now, synchronously, on the calling
+    thread -- see server.py's startup hook and DECISIONS.md "Model
+    warm-up and the torch/onnxruntime deadlock". Loading Piper's ONNX
+    Runtime session for the first time on a background thread, in a
+    process that already has torch loaded on the main thread (from VAD),
+    is what actually hung -- not because either library is slow, but
+    because their concurrent first-time thread-pool initialization can
+    deadlock. Loading everything up front, on the main thread, before
+    any request spins up a background thread, avoids the race
+    entirely."""
+    _load_voice()
+
+
 def output_sample_rate() -> int:
     """Piper's native output sample rate for the configured voice (22050Hz
     for en_US-lessac-medium, verified directly via `voice.config.sample_rate`

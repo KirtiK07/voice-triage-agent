@@ -9,16 +9,39 @@
     #status { color: #555; }
     #transcript { margin-top: 1.5rem; line-height: 1.6; }
     button { font-size: 1rem; padding: 0.5rem 1rem; cursor: pointer; }
+    .buttons { display: flex; gap: 0.75rem; }
+    #simulate-container[hidden] { display: none; }
+    #simulate-form { margin-top: 1.5rem; display: flex; gap: 0.5rem; }
+    #simulate-input { flex: 1; font-size: 1rem; padding: 0.5rem; }
+    .hint { color: #777; font-size: 0.9rem; margin-top: 0.25rem; }
   </style>
 </head>
 <body>
   <h1>Voice Triage Agent</h1>
   <p>A voice interface for triaging support tickets that can be interrupted
-    mid-response, not just talked over. Click Start, allow microphone
-    access, and describe an issue -- you can interrupt the agent's reply
-    at any point.</p>
-  <button id="start-button">Start call</button>
+    mid-response, not just talked over.</p>
+
+  <div class="buttons">
+    <button id="start-button">Start call (microphone)</button>
+    <button id="demo-button">Demo mode (no microphone)</button>
+  </div>
+  <p class="hint">Demo mode connects without asking for microphone access --
+    type what the caller says below instead of speaking. Useful for a
+    quick demo, or if a mic isn't available; the real pipeline (VAD,
+    transcription, the LLM response, TTS playback, and barge-in) runs
+    exactly the same either way.</p>
+
   <p>Status: <span id="status">not started</span></p>
+
+  <div id="simulate-container" hidden>
+    <form id="simulate-form">
+      <input id="simulate-input" type="text" placeholder="What the caller says…" autocomplete="off" />
+      <button type="submit">Say it</button>
+    </form>
+    <p class="hint">Tip: submit a second line while the agent is still
+      replying to trigger a real barge-in.</p>
+  </div>
+
   <div id="transcript"></div>
   <script src="client.js"></script>
 </body>

@@ -64,38 +64,54 @@ discipline of the prior `llm-cost-router` project.
   ```
 
 ## Current stage
-build — functionally complete, verification gap remains. All pieces
-implemented for real: TTS (Piper, streaming), VAD (Silero/WebRTC),
-STT (faster-whisper), LLM (Groq), `pipeline.py`'s `CallSession`
-(barge-in cancel/restart state machine + three-timestamp benchmark
-instrumentation), `turn_taking.py` (end-of-utterance detection, reuses
-the same cached VAD instance as barge-in), and `server.py`'s `/api/ws`
-handler wiring all of it together with real microphone-audio framing.
-The browser client (`public/client.js`, `public/mic-worklet.js`) does
-real `getUserMedia` capture via a dedicated AudioWorklet (16kHz,
-separate audio thread for low-latency barge-in timing) and a
-gapless-but-instantly-interruptible playback scheduler.
+build — complete and verified end-to-end for real, with a real
+`GROQ_API_KEY`. All pieces implemented and confirmed working together:
+TTS (Piper, streaming), VAD (Silero/WebRTC), STT (faster-whisper), LLM
+(Groq), `pipeline.py`'s `CallSession` (barge-in cancel/restart state
+machine + three-timestamp benchmark instrumentation), `turn_taking.py`
+(end-of-utterance detection, reuses the same cached VAD instance as
+barge-in), and `server.py`'s `/api/ws` handler wiring all of it
+together. `simulate_speech` (a JSON control message that synthesizes
+text into audio and feeds it through the exact same real pipeline as
+microphone input) was built specifically to make this verification
+possible without a real microphone — browser automation can't grant a
+real OS mic-permission dialog — and doubles as a real interview-demo
+control.
 
-46/47 automated tests passing (1 skipped: real Groq call, pending a real
-`GROQ_API_KEY` in `.env`, deferred to document stage). Several real bugs
-caught and fixed before shipping — see DECISIONS.md for the full list
-(exception-swallowing in TTS, a timestamp-ownership design issue and an
-async/race bug in the pipeline, two test-design races, byte-length bugs
-in the WS handler's own tests).
+54/54 automated tests passing (the real Groq integration test now runs
+for real, not skipped). Real end-to-end run confirmed: a simulated
+caller utterance transcribed correctly, a real agent response streamed
+back as real audio, and — the actual core feature this project exists to
+demonstrate — a second simulated utterance sent mid-playback correctly
+triggered a real `barge_in` event, cut the first response short (282KB
+delivered vs. ~530-600KB for an uninterrupted response), and started a
+new response in ~2s.
 
-**Two real, stated gaps, not glossed over:**
-1. No automated coverage for the browser client (no JS test framework;
-   the behavior that matters — real mic capture, AudioWorklet timing,
-   playback scheduling — can't be meaningfully unit-tested anyway).
-   Smoke-tested via browser automation up to the point of it correctly
-   requesting microphone access; automation cannot grant a real OS mic
-   permission dialog, so the actual mic→WS→playback→barge-in loop has
-   **not** been exercised end-to-end yet. Needs a human with a real
-   microphone.
-2. `.env` for this project is still empty (`GROQ_API_KEY` unset) — the
-   one real Groq integration test skips, and the full loop can't run at
-   all without it. Both gaps close together: filling in `.env` and doing
-   the human mic-test is the next concrete step, likely at test stage.
+Getting there surfaced three real bugs, all initially indistinguishable
+from the outside (client waits forever, nothing happens) despite having
+completely different causes — see DECISIONS.md "The end-to-end
+verification saga" for the full diagnosis chain: (1) a first-load
+deadlock between torch and onnxruntime, fixed by warming all models
+synchronously at server startup; (2) Piper's synthesized audio has no
+trailing silence, so end-of-speech detection never fired — fixed by
+padding `simulate_speech`'s synthesized audio; (3) the actual root
+cause behind the scariest symptom — `GROQ_API_KEY` was never in the real
+process environment (only `.env`-file parsing via pydantic-settings, and
+only `tests/conftest.py` bridges that into `os.environ`, and only for
+pytest) — plus a real, general robustness gap it exposed: exceptions in
+`CallSession`'s fire-and-forget background task were being silently
+lost, now caught, logged, and optionally surfaced to the client via a
+new `on_error` callback.
+
+**Remaining, real, stated gap:** the browser client (`public/client.js`,
+`public/mic-worklet.js`) still has no automated coverage and hasn't been
+exercised via a real human microphone — `simulate_speech` verifies the
+entire server-side pipeline for real, but the actual `getUserMedia`
+capture path is smoke-tested only (page loads, requests mic access
+correctly) pending a human clicking through it. Not blocking — the demo
+video and interview use will lean on `simulate_speech`'s no-mic path
+either way (see README/DECISIONS.md), with a real-mic test as a
+nice-to-have follow-up, not a blocker to calling this project done.
 
 ## Open questions
 - STT choice: does `faster-whisper` actually deliver low-enough-latency

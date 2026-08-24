@@ -20,12 +20,15 @@ span the cancel/restart boundary rather than being recreated fresh per
 """
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from voice_agent import llm, tts
 from voice_agent.vad import BargeInDetector, get_detector
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -58,12 +61,29 @@ class CallSession:
     the cancel/restart state machine and its timing.
     """
 
-    def __init__(self, send_audio: SendAudio, vad_backend: str | None = None) -> None:
+    def __init__(
+        self,
+        send_audio: SendAudio,
+        vad_backend: str | None = None,
+        on_error: Callable[[BaseException], Awaitable[None]] | None = None,
+    ) -> None:
         from voice_agent.config import settings
 
         backend = vad_backend or settings.vad_backend
         self._detector: BargeInDetector = get_detector(backend)
         self._send_audio = send_audio
+        # Real gap this closes, found the hard way: _run_turn runs as a
+        # fire-and-forget asyncio.create_task() (see start_turn) that
+        # nothing awaits under normal operation -- a real exception in it
+        # (not a bug in this class, but e.g. a misconfigured API key one
+        # layer down) used to die completely silently: no client message,
+        # no log line, the task's exception only "existed" once something
+        # eventually awaited or garbage-collected it, which during a live
+        # session could be never. Looked exactly like a hang from the
+        # outside. `on_error`, if provided, lets the caller (server.py)
+        # surface it to the client; logging happens either way. See
+        # DECISIONS.md "The GROQ_API_KEY bug that looked like a deadlock".
+        self._on_error = on_error
         self._playback_task: asyncio.Task | None = None
         self._pending_timings: TurnTimings | None = None
         self.turn_history: list[TurnTimings] = []
@@ -109,6 +129,14 @@ class CallSession:
         except asyncio.CancelledError:
             timings.t_playback_stopped = time.perf_counter()
             raise
+        except Exception as e:
+            # Always logged, regardless of on_error -- this is exactly
+            # the class of failure (a real error in a fire-and-forget
+            # background task) that previously vanished with zero trace.
+            # See __init__'s comment and DECISIONS.md.
+            logger.exception("Unhandled error in _run_turn for transcript %r", transcript)
+            if self._on_error is not None:
+                await self._on_error(e)
         finally:
             # Recorded once per barge-in event, not once per _run_turn call:
             # a `continuing` timings object is the *same* instance reused

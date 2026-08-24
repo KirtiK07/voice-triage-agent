@@ -164,3 +164,61 @@ def test_turn_timings_latency_properties_none_when_incomplete():
     t = TurnTimings()
     assert t.cutoff_latency_ms is None
     assert t.recovery_latency_ms is None
+
+
+@pytest.mark.asyncio
+async def test_run_turn_error_is_reported_via_on_error_not_swallowed(monkeypatch, fake_detector):
+    """Regression test for a real bug: _run_turn runs as a fire-and-forget
+    asyncio.create_task() that start_turn() never awaits, so an
+    exception inside it (e.g. llm.stream_response failing) used to die
+    completely silently -- no client message, no log-visible symptom
+    until something eventually awaited or garbage-collected the task,
+    which during a live session could be never. Found via a real
+    GROQ_API_KEY misconfiguration that looked exactly like a hang. See
+    DECISIONS.md."""
+    monkeypatch.setattr(pipeline_module.tts, "synthesize_stream", lambda t: _fake_tts_stream(t))
+
+    async def failing_llm_stream(_transcript):
+        raise RuntimeError("simulated LLM failure")
+        yield ""  # pragma: no cover -- unreachable, makes this a generator
+
+    monkeypatch.setattr(pipeline_module.llm, "stream_response", failing_llm_stream)
+
+    errors = []
+
+    async def on_error(exc):
+        errors.append(exc)
+
+    async def send_audio(_chunk):
+        pass
+
+    session = CallSession(send_audio=send_audio, vad_backend="silero", on_error=on_error)
+    await session.start_turn("hello")
+    await session._playback_task  # exception is caught inside _run_turn, not re-raised here
+
+    assert len(errors) == 1
+    assert isinstance(errors[0], RuntimeError)
+    assert str(errors[0]) == "simulated LLM failure"
+
+
+@pytest.mark.asyncio
+async def test_run_turn_error_is_logged_even_without_on_error(monkeypatch, fake_detector, caplog):
+    """on_error is optional -- the error must still be visible (logged),
+    not silently dropped, when the caller doesn't provide one."""
+    monkeypatch.setattr(pipeline_module.tts, "synthesize_stream", lambda t: _fake_tts_stream(t))
+
+    async def failing_llm_stream(_transcript):
+        raise RuntimeError("simulated LLM failure")
+        yield ""  # pragma: no cover -- unreachable, makes this a generator
+
+    monkeypatch.setattr(pipeline_module.llm, "stream_response", failing_llm_stream)
+
+    async def send_audio(_chunk):
+        pass
+
+    session = CallSession(send_audio=send_audio, vad_backend="silero")  # no on_error
+    with caplog.at_level("ERROR"):
+        await session.start_turn("hello")
+        await session._playback_task
+
+    assert any("Unhandled error in _run_turn" in record.message for record in caplog.records)
