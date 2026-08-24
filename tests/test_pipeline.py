@@ -167,6 +167,23 @@ def test_turn_timings_latency_properties_none_when_incomplete():
 
 
 @pytest.mark.asyncio
+async def test_wait_for_turn_blocks_until_completion(session, sent_audio):
+    """Public alternative to reaching into session._playback_task
+    directly -- added for eval/run_eval.py, which needs to know a turn
+    is genuinely finished (not just started) to measure
+    recovery_latency_ms honestly."""
+    await session.start_turn("hello")
+    await session.wait_for_turn()
+    assert session.is_speaking is False
+    assert len(sent_audio) > 0
+
+
+@pytest.mark.asyncio
+async def test_wait_for_turn_is_a_no_op_when_nothing_in_flight(session):
+    await session.wait_for_turn()  # must not raise
+
+
+@pytest.mark.asyncio
 async def test_run_turn_error_is_reported_via_on_error_not_swallowed(monkeypatch, fake_detector):
     """Regression test for a real bug: _run_turn runs as a fire-and-forget
     asyncio.create_task() that start_turn() never awaits, so an

@@ -92,6 +92,20 @@ class CallSession:
     def is_speaking(self) -> bool:
         return self._playback_task is not None and not self._playback_task.done()
 
+    async def wait_for_turn(self) -> None:
+        """Block until the current turn (if any) finishes speaking --
+        used by callers that need to know a turn is genuinely complete
+        (e.g. eval/run_eval.py measuring recovery_latency_ms), not just
+        that it started. A no-op if nothing is in flight. Swallows
+        CancelledError -- a turn ending via barge-in is a normal
+        outcome here, not a caller-visible error."""
+        if self._playback_task is None:
+            return
+        try:
+            await self._playback_task
+        except asyncio.CancelledError:
+            pass
+
     async def start_turn(self, transcript: str, continuing: TurnTimings | None = None) -> None:
         """Cancel any in-flight turn, then start a new one speaking the
         LLM's response to `transcript`.

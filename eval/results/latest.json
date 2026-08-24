@@ -1,0 +1,41 @@
+{
+  "generated_at": "2026-08-24T04:02:17+00:00",
+  "n_scenarios": 5,
+  "cutoff_latency_ms": {
+    "p50": 77.22139999270439,
+    "p95": 108.38934997916222,
+    "mean": 59.7847599864006
+  },
+  "recovery_latency_ms": {
+    "p50": 2207.1595999896526,
+    "p95": 3154.503560036421,
+    "mean": 2272.3406199932097
+  },
+  "raw_runs": [
+    {
+      "t_vad_fire": 168743.4142892,
+      "t_playback_stopped": 168743.4205547,
+      "t_new_audio_start": 168745.2805662
+    },
+    {
+      "t_vad_fire": 168747.7055977,
+      "t_playback_stopped": 168747.8133399,
+      "t_new_audio_start": 168749.9127573
+    },
+    {
+      "t_vad_fire": 168752.4361707,
+      "t_playback_stopped": 168752.5429884,
+      "t_new_audio_start": 168754.7306633
+    },
+    {
+      "t_vad_fire": 168756.8874567,
+      "t_playback_stopped": 168756.9646781,
+      "t_new_audio_start": 168759.6878381
+    },
+    {
+      "t_vad_fire": 168761.8062747,
+      "t_playback_stopped": 168761.8071517,
+      "t_new_audio_start": 168763.9996672
+    }
+  ]
+}
