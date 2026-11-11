@@ -482,3 +482,20 @@ redeploying -- it needs `uv` installed locally, which this dev machine
 doesn't have (Vercel's remote build servers have it; that's a
 build-environment difference, not a bug). Verification happened against
 the real remote deploy instead.
+
+## Deploy: Piper voice download needs a writable directory
+
+The live demo started returning `FUNCTION_INVOCATION_FAILED` on every
+request, including `/api/health`. The production runtime logs showed the
+real cause: `tts.warm()` at startup called `mkdir` on the configured
+relative `models/piper` path, and Vercel's function filesystem is
+read-only outside `/tmp`, so it raised `OSError: [Errno 30] Read-only file
+system: 'models'` and the app exited. Whisper and Silero loaded fine in
+the same logs.
+
+**Fix:** `tts._writable_download_dir()` keeps the configured directory
+when it can be created (local dev is unchanged) and otherwise falls back
+to `<system temp>/piper`. This lives in code rather than only in the
+`PIPER_MODEL_PATH` env var so a future environment can't reintroduce the
+same crash. The voice re-downloads on each cold start, as Whisper and
+Silero already do.

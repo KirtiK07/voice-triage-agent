@@ -17,6 +17,7 @@ the event loop on the next chunk's inference.
 
 import asyncio
 import queue
+import tempfile
 import threading
 from pathlib import Path
 from typing import AsyncIterator
@@ -37,6 +38,22 @@ def _voice_code_and_dir() -> tuple[str, Path]:
     return model_path.stem, model_path.parent
 
 
+def _writable_download_dir(download_dir: Path) -> Path:
+    """Returns `download_dir` if it can be created, otherwise a `piper/`
+    folder in the system temp dir. Vercel's function filesystem is
+    read-only except /tmp, so a relative `models/piper` path crashed
+    startup with `OSError: [Errno 30] Read-only file system` (seen in the
+    production logs, 2026-11-11). See DECISIONS.md "Deploy: Piper voice
+    download needs a writable directory"."""
+    try:
+        download_dir.mkdir(parents=True, exist_ok=True)
+        return download_dir
+    except OSError:
+        fallback = Path(tempfile.gettempdir()) / "piper"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+
 def _load_voice() -> PiperVoice:
     """Lazily download (if needed) and load the configured Piper voice.
     Thread-safe, cached module-wide -- model load is real work (ONNX
@@ -48,7 +65,7 @@ def _load_voice() -> PiperVoice:
         if _voice is not None:  # re-check inside the lock
             return _voice
         voice_code, download_dir = _voice_code_and_dir()
-        download_dir.mkdir(parents=True, exist_ok=True)
+        download_dir = _writable_download_dir(download_dir)
         download_voice(voice_code, download_dir)  # no-op if already present
         model_path = download_dir / f"{voice_code}.onnx"
         _voice = PiperVoice.load(model_path)

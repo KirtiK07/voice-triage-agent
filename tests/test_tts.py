@@ -65,3 +65,30 @@ async def test_synthesize_stream_propagates_real_failures(monkeypatch):
     with pytest.raises(RuntimeError, match="simulated voice-load failure"):
         async for _chunk in synthesize_stream("this should never synthesize"):
             pass
+
+
+def test_download_dir_falls_back_to_temp_when_read_only(monkeypatch, tmp_path):
+    """Regression test for the production crash on 2026-11-11: Vercel's
+    function filesystem is read-only outside /tmp, so creating the
+    configured relative `models/piper` folder raised OSError and took
+    down app startup. The voice must download to a temp dir instead."""
+    monkeypatch.setattr(tts_module.tempfile, "gettempdir", lambda: str(tmp_path))
+    real_mkdir = tts_module.Path.mkdir
+
+    def _read_only_mkdir(self, *args, **kwargs):
+        if self != tmp_path and tmp_path not in self.parents:
+            raise OSError(30, "Read-only file system", str(self))
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(tts_module.Path, "mkdir", _read_only_mkdir)
+
+    result = tts_module._writable_download_dir(tts_module.Path("models/piper"))
+
+    assert result == tmp_path / "piper"
+    assert result.is_dir()
+
+
+def test_download_dir_used_as_is_when_writable(tmp_path):
+    target = tmp_path / "models" / "piper"
+    assert tts_module._writable_download_dir(target) == target
+    assert target.is_dir()
